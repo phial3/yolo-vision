@@ -1,9 +1,10 @@
-.idea
-.vscode
-.DS_Store
+target/
+debug/
+runs/
 
 Cargo.lock
 
-runs/
-target/
-debug/
+.DS_Store
+.idea/
+.vscode/
+.history
