@@ -2,7 +2,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use usls::Options;
 
-static ARGS: Lazy<Args> = Lazy::new(|| argh::from_env());
+static ARGS: Lazy<Args> = Lazy::new(argh::from_env);
 
 #[derive(argh::FromArgs, Debug)]
 /// Example
@@ -140,7 +140,7 @@ pub fn build_options() -> Result<Options> {
     let args = instance();
 
     let mut options = Options::yolo()
-        .with_model_file(&args.model.as_ref().unwrap_or(&String::new()))
+        .with_model_file(args.model.as_ref().unwrap_or(&String::new()))
         .with_model_task(args.task.as_str().try_into()?)
         .with_model_version(args.ver.into())
         .with_model_scale(args.scale.as_str().try_into()?)

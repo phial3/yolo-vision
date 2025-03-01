@@ -1,14 +1,9 @@
 use anyhow::Result;
-use rsmedia::{
-    encode::{Encoder, Settings},
-    RawFrame,
-    time::Time,
-    DecoderBuilder, EncoderBuilder, Options,
-};
-use usls::{models::YOLO, Annotator, DataLoader};
-use cv_convert::{with_rsmpeg_image, TryFromCv};
+use cv_convert::TryFromCv;
+use rsmedia::{time::Time, EncoderBuilder};
 use rsmpeg::avutil::AVFrame;
-use yolo_vision::{args};
+use usls::{models::YOLO, Annotator, DataLoader};
+use yolo_vision::args;
 
 /// run: RUST_LOG=debug cargo run -- --source 'rtmp://172.24.82.44/live/livestream1' \
 /// --output 'rtmp://172.24.82.44/live/livestream_dev' \
@@ -41,12 +36,8 @@ fn main() -> Result<()> {
 
     let mut position = Time::zero();
     let duration: Time = Time::from_nth_of_a_second(24);
-    let settings = Settings::preset_h264_yuv420p(
-        1280,
-        720,
-        true
-    );
-    let mut encoder = EncoderBuilder::new(std::path::Path::new(&args::output()), settings)
+
+    let mut encoder = EncoderBuilder::new(std::path::Path::new(&args::output()), 1280, 720)
         .with_format("flv")
         .build()?;
 
@@ -69,9 +60,9 @@ fn main() -> Result<()> {
         let frames = annotator.plot(&xs, &ys, false)?;
 
         // encode
-        for (_i, img) in frames.iter().enumerate() {
+        for (i, img) in frames.iter().enumerate() {
             // save image
-            // img.save(format!("{}_{}.png", "/tmp/rsmedia_output", i))?;
+            img.save(format!("{}_{}.png", "/tmp/rsmedia_output", i))?;
 
             // image -> AVFrame 默认转换格式为 RGB24，在内部推流会自动转换为 YUV420P
             let mut frame = AVFrame::try_from_cv(&img.to_rgb8())?;
@@ -85,9 +76,9 @@ fn main() -> Result<()> {
         }
     }
 
-    encoder.finish().expect("failed to finish encoder");
-
     model.summary();
+
+    encoder.finish().expect("failed to finish encoder");
 
     Ok(())
 }
