@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 argh = "0.1"
+chrono = "0.4"
 anyhow = "1.0"
 image = "0.25"
 imageproc = "0.25"
@@ -20,12 +21,9 @@ tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 reqwest = { version = "0.12", features = ["json", "multipart", "http2"] }
 rsmedia = { git = "https://github.com/phial3/rsmedia", branch = "rsmpeg" }
-usls = { git = "https://github.com/phial3/usls", branch = "rsmedia", features = ["ffmpeg"] }
 cv-convert = { git = "https://github.com/phial3/cv-convert", branch = "main", features = ["rsmpeg"] }
-rsmpeg = { git = "https://github.com/larksuite/rsmpeg", branch = "master", features = [
-    "ffmpeg7", "link_system_ffmpeg"
-] }
-opencv = { version = "0.94", default-features = false, features = [
+usls = { git = "https://github.com/phial3/usls", branch = "rsmedia", features = ["ffmpeg"] }
+opencv = { version = "0.94", features = [
     "dnn",
     "videoio",
     "highgui",
@@ -42,7 +40,6 @@ opencv = { version = "0.94", default-features = false, features = [
 rayon = "1.10"
 regex = "1.11"
 time = "0.3"
-chrono = "0.4"
 camino = "1.1"
 crossbeam = "0.8"
 parking_lot = "0.12"

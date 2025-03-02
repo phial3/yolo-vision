@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 pub fn crop_black_borders(image: &Mat) -> Result<Mat> {
     // 创建一个边框
     let border_size = 2;
-    let mut bordered_image = Mat::new_size_with_default(
+    let bordered_image = Mat::new_size_with_default(
         Size::new(
             image.cols() + 2 * border_size,
             image.rows() + 2 * border_size,

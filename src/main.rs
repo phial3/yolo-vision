@@ -1,8 +1,8 @@
 use anyhow::Result;
 use cv_convert::TryFromCv;
-use rsmedia::{time::Time, EncoderBuilder};
-use rsmpeg::avutil::AVFrame;
-use usls::{models::YOLO, Annotator, DataLoader};
+use rsmedia::hwaccel::HWDeviceType;
+use rsmedia::{time::Time, EncoderBuilder, Options, RawFrame};
+use usls::{models::YOLO, Annotator, DataLoader, Device};
 use yolo_vision::args;
 
 /// run: RUST_LOG=debug cargo run -- --source 'rtmp://172.24.82.44/live/livestream1' \
@@ -25,6 +25,7 @@ fn main() -> Result<()> {
     // build dataloader
     let dl = DataLoader::new(&args::input_source())?
         .with_batch(model.batch() as _)
+        .with_device(Device::Cuda(0))
         .build()?;
 
     // build annotator
@@ -39,6 +40,10 @@ fn main() -> Result<()> {
 
     let mut encoder = EncoderBuilder::new(std::path::Path::new(&args::output()), 1280, 720)
         .with_format("flv")
+        .with_codec_name("h264_nvenc".to_string())
+        .with_hardware_device(HWDeviceType::CUDA)
+        .with_options(&Options::preset_h264_nvenc())
+        .with_thread_count(10)
         .build()?;
 
     tracing::info!("model run and annotate start...");
@@ -47,29 +52,28 @@ fn main() -> Result<()> {
     for (xs, _paths) in dl {
         let ys = model.forward(&xs)?;
         // extract bboxes
-        // for y in ys.iter() {
-        //     if let Some(bboxes) = y.bboxes() {
-        //         println!("[Bboxes]: Found {} objects", bboxes.len());
-        //         for (i, bbox) in bboxes.iter().enumerate() {
-        //             println!("{}: {:?}", i, bbox)
-        //         }
-        //     }
-        // }
+        for y in ys.iter() {
+            if let Some(bboxes) = y.bboxes() {
+                println!("[Bboxes]: Found {} objects", bboxes.len());
+                for (i, bbox) in bboxes.iter().enumerate() {
+                    println!("{}: {:?}", i, bbox)
+                }
+            }
+        }
 
         // plot
         let frames = annotator.plot(&xs, &ys, false)?;
 
         // encode
         for (i, img) in frames.iter().enumerate() {
-            // save image
-            img.save(format!("{}_{}.png", "/tmp/rsmedia_output", i))?;
+            // save image if needed
+            img.save(format!("/tmp/images/{}_{}.png", string_now("-"), i))?;
 
-            // image -> AVFrame 默认转换格式为 RGB24，在内部推流会自动转换为 YUV420P
-            let mut frame = AVFrame::try_from_cv(&img.to_rgb8())?;
-            // 设置帧的PTS
-            frame.set_pts(position.into_value().unwrap());
-            // 推流
-            encoder.encode_raw(&frame)?;
+            // image -> AVFrame
+            let raw_frame = RawFrame::try_from_cv(&img.to_rgb8())?;
+
+            // realtime streaming encoding
+            encoder.encode_raw(&raw_frame)?;
 
             // Update the current position and add the inter-frame duration to it.
             position = position.aligned_with(duration).add()
@@ -81,4 +85,13 @@ fn main() -> Result<()> {
     encoder.finish().expect("failed to finish encoder");
 
     Ok(())
+}
+
+pub(crate) fn string_now(delimiter: &str) -> String {
+    let t_now = chrono::Local::now();
+    let fmt = format!(
+        "%Y{}%m{}%d{}%H{}%M{}%S{}%f",
+        delimiter, delimiter, delimiter, delimiter, delimiter, delimiter
+    );
+    t_now.format(&fmt).to_string()
 }

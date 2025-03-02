@@ -14,6 +14,7 @@ fn main() {
 }
 
 #[tokio::main]
+#[allow(dead_code)]
 async fn http_get() -> Result<(), Box<dyn Error>> {
     // 设置请求的 URL
     let url = "http://172.24.82.44/umeam-ctu/alarm/plan/targetList";
@@ -53,6 +54,7 @@ async fn http_get() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::main]
+#[allow(dead_code)]
 async fn http_post() -> Result<(), Box<dyn Error>> {
     // 设置请求的 URL
     let url = "http://172.24.82.44/umeam-ctu/alarm/plan/page";
