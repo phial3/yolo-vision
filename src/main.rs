@@ -16,7 +16,7 @@ use yolo_vision::args;
 /// run: RUST_LOG=debug cargo run -- --source 'rtmp://172.24.82.44/live/livestream1' \
 /// --output 'rtmp://172.24.82.44/live/livestream_dev' \
 /// --model /Users/admin/Workspace/rust/rpi/models/v8/yolov8m.onnx
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
             .with_codec_name("h264_nvenc".to_string())
             .with_hardware_device(HWDeviceType::CUDA)
             .with_options(&Options::preset_h264_nvenc())
-            .with_thread_count(10)
+            .with_thread_count(16)
             .build()?,
     ));
 
@@ -195,14 +195,4 @@ fn calculate_stats(times: &[Duration]) -> (Duration, Duration, Duration) {
     let max = *times.iter().max().unwrap();
 
     (avg, min, max)
-}
-
-#[allow(dead_code)]
-pub(crate) fn string_now(delimiter: &str) -> String {
-    let t_now = chrono::Local::now();
-    let fmt = format!(
-        "%Y{}%m{}%d{}%H{}%M{}%S{}%f",
-        delimiter, delimiter, delimiter, delimiter, delimiter, delimiter
-    );
-    t_now.format(&fmt).to_string()
 }
