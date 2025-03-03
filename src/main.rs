@@ -1,11 +1,13 @@
 use anyhow::Result;
+use image::DynamicImage;
 use parking_lot::Mutex;
 use rayon::prelude::*;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use cv_convert::TryFromCv;
-use image::DynamicImage;
 use rsmedia::hwaccel::HWDeviceType;
 use rsmedia::{EncoderBuilder, Options, RawFrame};
 use usls::{models::YOLO, Annotator, DataLoader, Device};
@@ -60,6 +62,12 @@ async fn main() -> Result<()> {
 
     tracing::info!("model run and annotate start...");
 
+    // 创建性能统计计数器
+    let inference_times = Arc::new(Mutex::new(Vec::new()));
+    let annotation_times = Arc::new(Mutex::new(Vec::new()));
+    let encoding_times = Arc::new(Mutex::new(Vec::new()));
+    let encoding_times_for_encode = Arc::clone(&encoding_times);
+
     // 创建用于帧处理的channel
     let (frame_tx, mut frame_rx) = mpsc::channel::<DynamicImage>(32);
 
@@ -71,6 +79,8 @@ async fn main() -> Result<()> {
 
         tokio::spawn(async move {
             while let Some(frame) = frame_rx.recv().await {
+                let encode_start = Instant::now();
+
                 let raw_frame = match RawFrame::try_from_cv(&frame.to_rgb8()) {
                     Ok(rf) => rf,
                     Err(e) => {
@@ -84,37 +94,41 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                // 更新位置
-                // let mut pos = position.lock();
-                // *pos = pos.aligned_with(duration).add();
+                // 记录编码时间
+                encoding_times_for_encode
+                    .lock()
+                    .push(encode_start.elapsed());
             }
         })
     };
 
-    // 获取当前的运行时句柄
-    // let rt = tokio::runtime::Handle::current();
-
     // 主处理循环
     for (xs, _paths) in dl {
-        // 模型推理 - 使用 lock() 获取可变访问
+        let inference_start = Instant::now();
         let ys = match model.lock().forward(&xs) {
-            Ok(y) => y,
+            Ok(y) => {
+                inference_times.lock().push(inference_start.elapsed());
+                y
+            }
             Err(e) => {
                 tracing::error!("Model inference failed: {:?}", e);
                 continue;
             }
         };
 
-        // 标注处理
+        let annotation_start = Instant::now();
         let frames = match annotator.plot(&xs, &ys, false) {
-            Ok(f) => f,
+            Ok(f) => {
+                annotation_times.lock().push(annotation_start.elapsed());
+                f
+            }
             Err(e) => {
                 tracing::error!("Frame annotation failed: {:?}", e);
                 continue;
             }
         };
 
-        // 收集处理后的帧
+        let batch_sender_start = Instant::now();
         let processed_frames: Vec<_> = frames.into_par_iter().collect();
         // 在异步上下文中发送帧
         for frame in processed_frames {
@@ -123,6 +137,29 @@ async fn main() -> Result<()> {
                 continue;
             }
         }
+        let batch_sender = batch_sender_start.elapsed();
+
+        let inference_stats = calculate_stats(&inference_times.lock());
+        let annotation_stats = calculate_stats(&annotation_times.lock());
+        let encoding_stats = calculate_stats(&encoding_times.lock());
+
+        tracing::info!(
+            "Performance stats after 1 batches:\n\
+                 Inference: avg={:?}, min={:?}, max={:?}\n\
+                 Annotation: avg={:?}, min={:?}, max={:?}\n\
+                 Encoding: avg={:?}, min={:?}, max={:?}\n\
+                 Batch sender time: {:?}",
+            inference_stats.0,
+            inference_stats.1,
+            inference_stats.2,
+            annotation_stats.0,
+            annotation_stats.1,
+            annotation_stats.2,
+            encoding_stats.0,
+            encoding_stats.1,
+            encoding_stats.2,
+            batch_sender,
+        );
     }
 
     // 关闭frame channel
@@ -140,6 +177,24 @@ async fn main() -> Result<()> {
     encoder.lock().finish()?;
 
     Ok(())
+}
+
+/// 计算统计信息 (avg, min, max)
+fn calculate_stats(times: &[Duration]) -> (Duration, Duration, Duration) {
+    if times.is_empty() {
+        return (
+            Duration::default(),
+            Duration::default(),
+            Duration::default(),
+        );
+    }
+
+    let sum: Duration = times.iter().sum();
+    let avg = sum / times.len() as u32;
+    let min = *times.iter().min().unwrap();
+    let max = *times.iter().max().unwrap();
+
+    (avg, min, max)
 }
 
 #[allow(dead_code)]
