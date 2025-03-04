@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crossbeam::queue::SegQueue;
 use image::DynamicImage;
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -16,7 +17,7 @@ use yolo_vision::args;
 /// run: RUST_LOG=debug cargo run -- --source 'rtmp://172.24.82.44/live/livestream1' \
 /// --output 'rtmp://172.24.82.44/live/livestream_dev' \
 /// --model /Users/admin/Workspace/rust/rpi/models/v8/yolov8m.onnx
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -63,10 +64,10 @@ async fn main() -> Result<()> {
     tracing::info!("model run and annotate start...");
 
     // 创建性能统计计数器
-    let inference_times = Arc::new(Mutex::new(Vec::new()));
-    let annotation_times = Arc::new(Mutex::new(Vec::new()));
-    let encoding_times = Arc::new(Mutex::new(Vec::new()));
-    let encoding_times_for_encode = Arc::clone(&encoding_times);
+    let inference_times = Arc::new(SegQueue::new());
+    let annotation_times = Arc::new(SegQueue::new());
+    let encoding_times = Arc::new(SegQueue::new());
+    let encoding_times_clone = Arc::clone(&encoding_times);
 
     // 创建用于帧处理的channel
     let (frame_tx, mut frame_rx) = mpsc::channel::<DynamicImage>(32);
@@ -89,25 +90,25 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                if let Err(e) = encoder.lock().encode_raw(&raw_frame) {
-                    tracing::error!("Failed to encode frame: {:?}", e);
-                    continue;
-                }
+                tokio::task::block_in_place(|| {
+                    if let Err(e) = encoder.lock().encode_raw(&raw_frame) {
+                        tracing::error!("Failed to encode frame: {:?}", e);
+                    }
+                });
 
                 // 记录编码时间
-                encoding_times_for_encode
-                    .lock()
-                    .push(encode_start.elapsed());
+                encoding_times_clone.push(encode_start.elapsed());
             }
         })
     };
 
     // 主处理循环
+    let mut batch_count = 0;
     for (xs, _paths) in dl {
         let inference_start = Instant::now();
         let ys = match model.lock().forward(&xs) {
             Ok(y) => {
-                inference_times.lock().push(inference_start.elapsed());
+                inference_times.push(inference_start.elapsed());
                 y
             }
             Err(e) => {
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
         let annotation_start = Instant::now();
         let frames = match annotator.plot(&xs, &ys, false) {
             Ok(f) => {
-                annotation_times.lock().push(annotation_start.elapsed());
+                annotation_times.push(annotation_start.elapsed());
                 f
             }
             Err(e) => {
@@ -137,29 +138,32 @@ async fn main() -> Result<()> {
                 continue;
             }
         }
-        let batch_sender = batch_sender_start.elapsed();
 
-        let inference_stats = calculate_stats(&inference_times.lock());
-        let annotation_stats = calculate_stats(&annotation_times.lock());
-        let encoding_stats = calculate_stats(&encoding_times.lock());
+        batch_count += 1;
+        if batch_count % 10 == 0 {
+            // 从 SegQueue 中获取所有元素
+            let inference_stats = collect_and_calculate_stats(&inference_times);
+            let annotation_stats = collect_and_calculate_stats(&annotation_times);
+            let encoding_stats = collect_and_calculate_stats(&encoding_times.clone());
 
-        tracing::info!(
-            "Performance stats after 1 batches:\n\
+            tracing::info!(
+                "Performance stats after 1 batches:\n\
                  Inference: avg={:?}, min={:?}, max={:?}\n\
                  Annotation: avg={:?}, min={:?}, max={:?}\n\
                  Encoding: avg={:?}, min={:?}, max={:?}\n\
                  Batch sender time: {:?}",
-            inference_stats.0,
-            inference_stats.1,
-            inference_stats.2,
-            annotation_stats.0,
-            annotation_stats.1,
-            annotation_stats.2,
-            encoding_stats.0,
-            encoding_stats.1,
-            encoding_stats.2,
-            batch_sender,
-        );
+                inference_stats.0,
+                inference_stats.1,
+                inference_stats.2,
+                annotation_stats.0,
+                annotation_stats.1,
+                annotation_stats.2,
+                encoding_stats.0,
+                encoding_stats.1,
+                encoding_stats.2,
+                batch_sender_start.elapsed(),
+            );
+        }
     }
 
     // 关闭frame channel
@@ -177,6 +181,16 @@ async fn main() -> Result<()> {
     encoder.lock().finish()?;
 
     Ok(())
+}
+
+/// 从 SegQueue 中收集所有元素并计算统计信息
+fn collect_and_calculate_stats(queue: &SegQueue<Duration>) -> (Duration, Duration, Duration) {
+    // 逐个弹出元素，直到队列为空
+    let mut times = Vec::new();
+    while let Some(duration) = queue.pop() {
+        times.push(duration);
+    }
+    calculate_stats(&times)
 }
 
 /// 计算统计信息 (avg, min, max)
